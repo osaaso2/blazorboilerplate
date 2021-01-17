@@ -50,6 +50,7 @@ namespace BlazorBoilerplate.Server.Managers
         private readonly UrlEncoder _urlEncoder;
         private readonly IEventService _events;
         private readonly IStringLocalizer<Global> L;
+        private readonly string baseUrl;
 
         private static readonly UserViewModel LoggedOutUser = new UserViewModel { IsAuthenticated = false, Roles = new List<string>() };
 
@@ -82,6 +83,7 @@ namespace BlazorBoilerplate.Server.Managers
             _urlEncoder = urlEncoder;
             _events = events;
             L = l;
+            baseUrl = configuration["Robot:ApplicationUrl"];
         }
 
         public async Task<ApiResponse> ConfirmEmail(ConfirmEmailViewModel parameters)
@@ -92,22 +94,28 @@ namespace BlazorBoilerplate.Server.Managers
             }
 
             var user = await _userManager.FindByIdAsync(parameters.UserId);
+
             if (user == null)
             {
                 _logger.LogInformation(L["The user {0} doesn't exist", parameters.UserId]);
                 return new ApiResponse(Status404NotFound, L["The user doesn't exist"]);
             }
 
-            var token = parameters.Token;
-            var result = await _userManager.ConfirmEmailAsync(user, token);
-            if (!result.Succeeded)
+            if (!user.EmailConfirmed)
             {
-                var msg = string.Join(",", result.Errors.Select(i => i.Description));
-                _logger.LogWarning("User Email Confirmation Failed: {0}", msg);
-                return new ApiResponse(Status400BadRequest, msg);
-            }
+                var token = parameters.Token;
+                var result = await _userManager.ConfirmEmailAsync(user, token);
 
-            await _signInManager.SignInAsync(user, true);
+                if (!result.Succeeded)
+                {
+                    var msg = string.Join(",", result.Errors.Select(i => i.Description));
+                    _logger.LogWarning("User Email Confirmation Failed: {0}", msg);
+                    return new ApiResponse(Status400BadRequest, msg);
+                }
+
+                await _userManager.RemoveClaimAsync(user, new Claim(JwtClaimTypes.EmailVerified, ClaimValues.falseString, ClaimValueTypes.Boolean));
+                await _userManager.AddClaimAsync(user, new Claim(JwtClaimTypes.EmailVerified, ClaimValues.trueString, ClaimValueTypes.Boolean));
+            }
 
             return new ApiResponse(Status200OK, L["EmailVerificationSuccessful"]);
         }
@@ -129,7 +137,7 @@ namespace BlazorBoilerplate.Server.Managers
             {
                 // For more information on how to enable account confirmation and password reset please visit http://go.microsoft.com/fwlink/?LinkID=532713
                 var token = await _userManager.GeneratePasswordResetTokenAsync(user);
-                string callbackUrl = string.Format("{0}/Account/ResetPassword/{1}?token={2}", _configuration["BlazorBoilerplate:ApplicationUrl"], user.Id, token); //token must be a query string parameter as it is very long
+                string callbackUrl = string.Format("{0}/Account/ResetPassword/{1}?token={2}", baseUrl, user.Id, token); //token must be a query string parameter as it is very long
 
                 var email = _emailFactory.BuildForgotPasswordEmail(user.UserName, callbackUrl, token);
                 email.ToAddresses.Add(new EmailAddressDto(user.Email, user.Email));
@@ -678,7 +686,7 @@ namespace BlazorBoilerplate.Server.Managers
                         new Claim(Policies.IsUser, string.Empty),
                         new Claim(JwtClaimTypes.Name, parameters.UserName),
                         new Claim(JwtClaimTypes.Email, parameters.Email),
-                        new Claim(JwtClaimTypes.EmailVerified, "false", ClaimValueTypes.Boolean)
+                        new Claim(JwtClaimTypes.EmailVerified, ClaimValues.falseString, ClaimValueTypes.Boolean)
                     }).Result;
             }
 
@@ -693,7 +701,7 @@ namespace BlazorBoilerplate.Server.Managers
                 {
                     // For more information on how to enable account confirmation and password reset please visit http://go.microsoft.com/fwlink/?LinkID=532713
                     var token = await _userManager.GenerateEmailConfirmationTokenAsync(user);
-                    string callbackUrl = string.Format("{0}/Account/ConfirmEmail/{1}?token={2}", _configuration["BlazorBoilerplate:ApplicationUrl"], user.Id, token);
+                    string callbackUrl = string.Format("{0}/Account/ConfirmEmail/{1}?token={2}", baseUrl, user.Id, token);
 
                     var email = _emailFactory.BuildNewUserConfirmationEmail(user.UserName, user.Email, callbackUrl, user.Id.ToString(), token);
                     email.ToAddresses.Add(new EmailAddressDto(user.Email, user.Email));
@@ -804,7 +812,7 @@ namespace BlazorBoilerplate.Server.Managers
 
                         //HACK to switch to claims auth
                         foreach (var role in rolesToAdd)
-                            await _userManager.AddClaimAsync(user, new Claim($"Is{role}", "true"));
+                            await _userManager.AddClaimAsync(user, new Claim($"Is{role}", ClaimValues.trueString));
                     }
 
                     var rolesToRemove = currentUserRoles.Where(role => !userViewModel.Roles.Contains(role)).ToList();
@@ -818,7 +826,7 @@ namespace BlazorBoilerplate.Server.Managers
 
                         //HACK to switch to claims auth
                         foreach (var role in rolesToRemove)
-                            await _userManager.RemoveClaimAsync(user, new Claim($"Is{role}", "true"));
+                            await _userManager.RemoveClaimAsync(user, new Claim($"Is{role}", ClaimValues.trueString));
                     }
                 }
                 catch (Exception ex)
@@ -879,7 +887,7 @@ namespace BlazorBoilerplate.Server.Managers
                     new Claim(Policies.IsUser, string.Empty),
                     new Claim(JwtClaimTypes.Name, user.UserName),
                     new Claim(JwtClaimTypes.Email, user.Email),
-                    new Claim(JwtClaimTypes.EmailVerified, "false", ClaimValueTypes.Boolean)
+                    new Claim(JwtClaimTypes.EmailVerified, ClaimValues.falseString, ClaimValueTypes.Boolean)
                 });
 
             if (await _roleManager.RoleExistsAsync(DefaultRoleNames.User))
@@ -893,7 +901,7 @@ namespace BlazorBoilerplate.Server.Managers
             {
                 // For more information on how to enable account confirmation and password reset please visit http://go.microsoft.com/fwlink/?LinkID=532713
                 var token = await _userManager.GenerateEmailConfirmationTokenAsync(user);
-                var callbackUrl = $"{_configuration["BlazorBoilerplate:ApplicationUrl"]}/Account/ConfirmEmail/{user.Id}?token={token}";
+                var callbackUrl = $"{baseUrl}/Account/ConfirmEmail/{user.Id}?token={token}";
 
                 emailMessage = _emailFactory.BuildNewUserConfirmationEmail(user.UserName, user.Email, callbackUrl, user.Id.ToString(), token);
             }
@@ -907,6 +915,8 @@ namespace BlazorBoilerplate.Server.Managers
             try
             {
                 await _emailManager.SendEmailAsync(emailMessage);
+
+                _logger.LogInformation($"New user email sent to {user.Email}");
             }
             catch (Exception ex)
             {

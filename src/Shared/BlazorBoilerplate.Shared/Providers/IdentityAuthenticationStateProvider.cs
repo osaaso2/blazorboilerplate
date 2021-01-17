@@ -28,7 +28,6 @@ namespace BlazorBoilerplate.Shared.Providers
         public async Task<ApiResponseDto<LoginResponseModel>> Login(LoginInputModel parameters)
         {
             ApiResponseDto<LoginResponseModel> apiResponse = await _accountApiClient.Login(parameters);
-            NotifyAuthenticationStateChanged(GetAuthenticationStateAsync());
             return apiResponse;
         }
 
@@ -55,7 +54,6 @@ namespace BlazorBoilerplate.Shared.Providers
         public async Task<ApiResponseDto<LoginResponseModel>> Register(RegisterViewModel parameters)
         {
             ApiResponseDto<LoginResponseModel> apiResponse = await _accountApiClient.Register(parameters);
-            NotifyAuthenticationStateChanged(GetAuthenticationStateAsync());
             return apiResponse;
         }
 
@@ -67,7 +65,6 @@ namespace BlazorBoilerplate.Shared.Providers
         public async Task<ApiResponseDto> ConfirmEmail(ConfirmEmailViewModel parameters)
         {
             ApiResponseDto apiResponse = await _accountApiClient.ConfirmEmail(parameters);
-            NotifyAuthenticationStateChanged(GetAuthenticationStateAsync());
             return apiResponse;
         }
 
